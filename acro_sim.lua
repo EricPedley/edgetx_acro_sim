@@ -115,9 +115,10 @@ end
 
 ------ PROJECTION ------
 
--- Project a world point to screen coordinates
--- Returns nil if point is behind camera
-local function projectPoint(worldX, worldY, worldZ)
+local nearPlane = 0.1 -- near clipping plane distance
+
+-- Get camera-space coordinates for a world point
+local function worldToCameraSpace(worldX, worldY, worldZ)
   -- Transform world point to drone-relative coordinates
   local relX = worldX - dronePosition.x
   local relY = worldY - dronePosition.y
@@ -130,14 +131,11 @@ local function projectPoint(worldX, worldY, worldZ)
   local camTiltQuat = quatFromAxisAngle(0, 1, 0, rad(camAngle))
   camQuat = quatMultiply(camTiltQuat, camQuat)
   
-  local camPos = quatRotateVec(camQuat, {x = relX, y = relY, z = relZ})
-  
-  -- In camera frame: X = forward, Y = left, Z = up
-  -- Pinhole projection
-  if camPos.x <= 0.1 then
-    return nil -- behind camera
-  end
-  
+  return quatRotateVec(camQuat, {x = relX, y = relY, z = relZ})
+end
+
+-- Project a camera-space point to screen coordinates
+local function projectCameraPoint(camPos)
   -- Calculate focal length from HFOV
   local focalLength = (LCD_W / 2) / math.tan(rad(camHFOV / 2))
   
@@ -148,14 +146,57 @@ local function projectPoint(worldX, worldY, worldZ)
   return {x = screenX, y = screenY, depth = camPos.x}
 end
 
+-- Clip a line segment against the near plane
+-- Returns clipped camera-space endpoints, or nil if entirely behind
+local function clipLineToNearPlane(c1, c2)
+  local d1 = c1.x - nearPlane
+  local d2 = c2.x - nearPlane
+  
+  -- Both behind near plane
+  if d1 < 0 and d2 < 0 then
+    return nil, nil
+  end
+  
+  -- Both in front of near plane
+  if d1 >= 0 and d2 >= 0 then
+    return c1, c2
+  end
+  
+  -- One point behind, one in front - clip the line
+  local t = d1 / (d1 - d2)
+  local clippedPoint = {
+    x = c1.x + t * (c2.x - c1.x),
+    y = c1.y + t * (c2.y - c1.y),
+    z = c1.z + t * (c2.z - c1.z)
+  }
+  
+  if d1 < 0 then
+    -- c1 is behind, c2 is in front
+    return clippedPoint, c2
+  else
+    -- c1 is in front, c2 is behind
+    return c1, clippedPoint
+  end
+end
+
 ------ RENDERING ------
 
 local function drawLine3D(x1, y1, z1, x2, y2, z2)
-  local p1 = projectPoint(x1, y1, z1)
-  local p2 = projectPoint(x2, y2, z2)
-  if p1 and p2 then
-    lcd.drawLine(p1.x, p1.y, p2.x, p2.y, SOLID, FORCE)
+  -- Transform to camera space
+  local c1 = worldToCameraSpace(x1, y1, z1)
+  local c2 = worldToCameraSpace(x2, y2, z2)
+  
+  -- Clip against near plane
+  local clipped1, clipped2 = clipLineToNearPlane(c1, c2)
+  if not clipped1 or not clipped2 then
+    return -- line entirely behind camera
   end
+  
+  -- Project to screen
+  local p1 = projectCameraPoint(clipped1)
+  local p2 = projectCameraPoint(clipped2)
+  
+  lcd.drawLine(p1.x, p1.y, p2.x, p2.y, SOLID, FORCE)
 end
 
 local function drawCube(cx, cy, cz, size)
