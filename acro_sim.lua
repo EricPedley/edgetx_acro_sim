@@ -1,6 +1,7 @@
 -- Acro FPV drone simulator for OpenTX --
 -- Author: Eric Pedley
 
+local topSpeed = 15 -- meters per second
 local thrustWeightRatio = 4.0
 local camAngle = 20.0 -- degrees, positive = tilted up
 local camHFOV = 110.0 -- horizontal field of view in degrees
@@ -10,6 +11,17 @@ local rate = 0.7
 local expo = 0.0
 
 local gravity = 9.81
+
+-- Drag coefficient calculated so that at max horizontal flight, drone reaches topSpeed
+-- At max horizontal speed, drone tilts so vertical thrust = gravity:
+--   TWR * g * sin(theta) = g  =>  sin(theta) = 1/TWR
+--   cos(theta) = sqrt(1 - 1/TWR^2) = sqrt(TWR^2 - 1) / TWR
+-- Horizontal thrust component: TWR * g * cos(theta) = g * sqrt(TWR^2 - 1)
+-- At terminal velocity: drag = horizontal thrust
+--   dragCoeff * topSpeed^2 = g * sqrt(TWR^2 - 1)
+-- Therefore: dragCoeff = g * sqrt(TWR^2 - 1) / topSpeed^2
+local maxHorizontalThrust = gravity * math.sqrt(thrustWeightRatio * thrustWeightRatio - 1)
+local dragCoeff = maxHorizontalThrust / (topSpeed * topSpeed)
 local dt = 0.05 -- timestep in seconds (approx 20 fps)
 
 local dronePosition = {x = 0, y = 0, z = 2} -- z is up
@@ -137,7 +149,8 @@ end
 -- Project a camera-space point to screen coordinates
 local function projectCameraPoint(camPos)
   -- Guard against division by zero or very small values
-  if camPos.x < nearPlane then
+  -- Use a small epsilon instead of nearPlane to handle clipped points
+  if camPos.x < 0.001 then
     return nil
   end
   
@@ -184,6 +197,44 @@ local function clipLineToNearPlane(c1, c2)
   end
 end
 
+-- Clip a 2D line segment to the screen bounds using Liang-Barsky algorithm
+-- Returns clipped screen coordinates, or nil if entirely outside
+local function clipLineToScreen(x1, y1, x2, y2)
+  local xmin, ymin, xmax, ymax = 0, 0, LCD_W - 1, LCD_H - 1
+  local dx = x2 - x1
+  local dy = y2 - y1
+  local p = {-dx, dx, -dy, dy}
+  local q = {x1 - xmin, xmax - x1, y1 - ymin, ymax - y1}
+  local t0, t1 = 0, 1
+  
+  for i = 1, 4 do
+    if p[i] == 0 then
+      -- Line is parallel to this edge
+      if q[i] < 0 then
+        return nil -- Line is outside and parallel
+      end
+    else
+      local t = q[i] / p[i]
+      if p[i] < 0 then
+        -- Entering edge
+        if t > t1 then return nil end
+        if t > t0 then t0 = t end
+      else
+        -- Leaving edge
+        if t < t0 then return nil end
+        if t < t1 then t1 = t end
+      end
+    end
+  end
+  
+  local cx1 = x1 + t0 * dx
+  local cy1 = y1 + t0 * dy
+  local cx2 = x1 + t1 * dx
+  local cy2 = y1 + t1 * dy
+  
+  return cx1, cy1, cx2, cy2
+end
+
 ------ RENDERING ------
 
 local function drawLine3D(x1, y1, z1, x2, y2, z2)
@@ -206,7 +257,13 @@ local function drawLine3D(x1, y1, z1, x2, y2, z2)
     return
   end
   
-  lcd.drawLine(p1.x, p1.y, p2.x, p2.y, SOLID, FORCE)
+  -- Clip to screen bounds (handles lines with endpoints outside viewport)
+  local sx1, sy1, sx2, sy2 = clipLineToScreen(p1.x, p1.y, p2.x, p2.y)
+  if not sx1 then
+    return -- line entirely outside screen
+  end
+  
+  lcd.drawLine(sx1, sy1, sx2, sy2, SOLID, FORCE)
 end
 
 local function drawCube(cx, cy, cz, size)
@@ -285,10 +342,21 @@ local function physics_step(deltaT)
   local thrustBody = {x = 0, y = 0, z = thrustMag}
   local thrustWorld = quatRotateVec(droneQuat, thrustBody)
   
-  -- Apply forces: thrust + gravity
-  local ax = thrustWorld.x
-  local ay = thrustWorld.y
-  local az = thrustWorld.z - gravity
+  -- Calculate drag force (proportional to v^2, opposing velocity)
+  local speed = math.sqrt(droneSpeed.x^2 + droneSpeed.y^2 + droneSpeed.z^2)
+  local dragMag = dragCoeff * speed * speed
+  local dragX, dragY, dragZ = 0, 0, 0
+  if speed > 0.001 then
+    -- Drag opposes velocity direction
+    dragX = -dragCoeff * speed * droneSpeed.x
+    dragY = -dragCoeff * speed * droneSpeed.y
+    dragZ = -dragCoeff * speed * droneSpeed.z
+  end
+  
+  -- Apply forces: thrust + gravity + drag
+  local ax = thrustWorld.x + dragX
+  local ay = thrustWorld.y + dragY
+  local az = thrustWorld.z - gravity + dragZ
   
   -- Integrate velocity
   droneSpeed.x = droneSpeed.x + ax * deltaT
