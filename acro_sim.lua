@@ -1,6 +1,30 @@
 -- Acro FPV drone simulator for OpenTX --
 -- Author: Eric Pedley
 
+-- Settings adjustable in the sim
+local topSpeed = 20 -- meters per second
+local thrustWeightRatio = 4.0
+local camAngle = 25.0 -- degrees, positive = tilted up
+
+-- Hard-coded settings
+local camHFOV = 120.0 -- horizontal field of view in degrees
+
+-- Betaflight rates profile
+local rcRate = 1.0
+local rate = 0.7
+local expo = 0.0
+
+-- cube locations and side length (x forward, y left, z up, side length in meters)
+local cubes = {
+  {6, 0, 2, 3},
+  {-3, -5, 5, 5},
+}
+
+-- Size and spacing of lines drawn on the ground
+local gridSize = 100  -- total grid extent (meters)
+local gridSpacing = 25 -- spacing between grid lines (meters)
+local gravity = 9.81 -- m/s^2
+
 -- Cache math functions for performance
 local sqrt = math.sqrt
 local sin = math.sin
@@ -16,16 +40,6 @@ local PI_OVER_180 = math.pi / 180
 
 local settingsPath = "/SCRIPTS/acro_settings.txt"
 
-local topSpeed = 20 -- meters per second
-local thrustWeightRatio = 4.0
-local camAngle = 25.0 -- degrees, positive = tilted up
-local camHFOV = 120.0 -- horizontal field of view in degrees
-
-local rcRate = 1.0
-local rate = 0.7
-local expo = 0.0
-
-local gravity = 9.81
 
 -- Settings menu state
 local settingNames = {"Top Speed", "TWR", "Cam Angle"}
@@ -162,16 +176,6 @@ local cachedSpdInt = -9999
 local lastTime = 0
 
 -- Hard-coded cubes: {x, y, z, size} where z is up
-local cubes = {
-  {6, 0, 2, 3},
-  {-3, -5, 5, 5},
-  -- {10, 5, 0.5, 1},
-  -- {0, 10, 2, 2},
-}
-
--- Grid settings
-local gridSize = 100  -- total grid extent
-local gridSpacing = 25 -- spacing between grid lines
 
 ------ MATH HELPERS ------
 
