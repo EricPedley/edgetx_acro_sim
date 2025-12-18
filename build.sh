@@ -22,17 +22,6 @@ if [ ! -d "$TARGET_DIR" ]; then
     exit 1
 fi
 
-# Create backup directory with timestamp
-BACKUP_DIR="./backups/$(date +%Y%m%d_%H%M%S)"
-echo -e "${YELLOW}Creating backup: $BACKUP_DIR${NC}"
-mkdir -p "$BACKUP_DIR"
-
-# Backup existing files if they exist
-if [ -f "$TARGET_DIR/example-sim-game.lua" ]; then
-    cp "$TARGET_DIR"/*.lua "$BACKUP_DIR/" 2>/dev/null
-    echo -e "${GREEN}✓ Backup created${NC}"
-fi
-
 # Find and copy all Lua files
 echo ""
 echo -e "${YELLOW}Copying Lua scripts...${NC}"
