@@ -2,175 +2,301 @@
 -- Author: Eric Pedley
 
 local thrustWeightRatio = 4.0
-local camAngle = 30.0
-local camHFOV = 110.0 -- focal length can be calculated with LCD_W
+local camAngle = 30.0 -- degrees, positive = tilted up
+local camHFOV = 110.0 -- horizontal field of view in degrees
 
 local rcRate = 1.0
-local rate=0.7
-local expo=0.0
+local rate = 0.7
+local expo = 0.0
 
-local gravity=9.81
+local gravity = 9.81
+local dt = 0.05 -- timestep in seconds (approx 20 fps)
 
-local dronePosition = {x = 0, y = 0, z = 0}
-local droneSpeed = {x=0,y=0,z=0}
-local droneQuat = {x=0, y=0, z=0, w=0}
+local dronePosition = {x = 0, y = 0, z = 2} -- z is up
+local droneSpeed = {x = 0, y = 0, z = 0}
+-- quaternion: w is scalar, x/y/z are vector components
+-- identity = no rotation, drone facing +X direction
+local droneQuat = {w = 1, x = 0, y = 0, z = 0}
 
-local angVelBody = {x=0, y=0, z=0}
-local thrust = 0
+local lastTime = 0
 
+-- Hard-coded cubes: {x, y, z, size} where z is up
+local cubes = {
+  {5, 0, 1, 2},
+  {-3, -5, 1.5, 3},
+  {10, 5, 0.5, 1},
+  {0, 10, 2, 2},
+}
 
+-- Grid settings
+local gridSize = 50  -- total grid extent
+local gridSpacing = 5 -- spacing between grid lines
 
-local function stickToAngularVel(stickInput)
-    -- takes stickInput scaled from -1 to 1, and returns angular velocity in degrees/second --
-    return 200* (rcRate+(max(0,14.54*(rcRate-2)))) * stickInput * (abs(stickInput)**3 * expo + 1 - expo) / max(1-abs(stickInput)*rate, 0.01)
+------ MATH HELPERS ------
+
+local function clamp(val, minVal, maxVal)
+  return math.max(minVal, math.min(maxVal, val))
 end
 
-local function projectPoint(x3D, y3D, z3D)
-    -- does a pinhole projection to get 2D coords on the LCD screen 
+local function rad(deg)
+  return deg * math.pi / 180
+end
 
+local function deg(r)
+  return r * 180 / math.pi
+end
+
+------ QUATERNION MATH ------
+
+local function quatNormalize(q)
+  local mag = math.sqrt(q.w*q.w + q.x*q.x + q.y*q.y + q.z*q.z)
+  if mag < 0.0001 then mag = 1 end
+  return {w = q.w/mag, x = q.x/mag, y = q.y/mag, z = q.z/mag}
+end
+
+local function quatMultiply(a, b)
+  return {
+    w = a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z,
+    x = a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
+    y = a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
+    z = a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w
+  }
+end
+
+local function quatConjugate(q)
+  return {w = q.w, x = -q.x, y = -q.y, z = -q.z}
+end
+
+-- Rotate a vector by a quaternion
+local function quatRotateVec(q, v)
+  local qv = {w = 0, x = v.x, y = v.y, z = v.z}
+  local result = quatMultiply(quatMultiply(q, qv), quatConjugate(q))
+  return {x = result.x, y = result.y, z = result.z}
+end
+
+-- Create quaternion from axis-angle (axis should be unit vector, angle in radians)
+local function quatFromAxisAngle(ax, ay, az, angle)
+  local halfAngle = angle / 2
+  local s = math.sin(halfAngle)
+  return {
+    w = math.cos(halfAngle),
+    x = ax * s,
+    y = ay * s,
+    z = az * s
+  }
+end
+
+-- Update quaternion with body angular velocity (roll=x, pitch=y, yaw=z) in rad/s
+local function quatIntegrateBodyRates(q, wx, wy, wz, deltaT)
+  -- Angular velocity magnitude
+  local wMag = math.sqrt(wx*wx + wy*wy + wz*wz)
+  if wMag < 0.0001 then
+    return q
+  end
+  -- Create rotation quaternion for this timestep
+  local angle = wMag * deltaT
+  local dq = quatFromAxisAngle(wx/wMag, wy/wMag, wz/wMag, angle)
+  -- Apply rotation: new_q = q * dq (body frame rotation)
+  return quatNormalize(quatMultiply(q, dq))
+end
+
+------ BETAFLIGHT RATES ------
+
+local function stickToAngularVel(stickInput)
+  -- Betaflight rates formula, returns rad/s
+  local absStick = math.abs(stickInput)
+  local superRate = rate
+  local rcCommand = stickInput
+  local angleRate = 200 * rcRate * rcCommand
+  local superFactor = 1.0 / clamp(1.0 - absStick * superRate, 0.01, 1.0)
+  local expoFactor = absStick * absStick * absStick * expo + (1 - expo)
+  return rad(angleRate * superFactor * expoFactor)
+end
+
+------ PROJECTION ------
+
+-- Project a world point to screen coordinates
+-- Returns nil if point is behind camera
+local function projectPoint(worldX, worldY, worldZ)
+  -- Transform world point to drone-relative coordinates
+  local relX = worldX - dronePosition.x
+  local relY = worldY - dronePosition.y
+  local relZ = worldZ - dronePosition.z
+  
+  -- Rotate by inverse of drone orientation to get camera-frame coords
+  local camQuat = quatConjugate(droneQuat)
+  
+  -- Apply camera tilt (rotate around Y axis in body frame)
+  local camTiltQuat = quatFromAxisAngle(0, 1, 0, rad(-camAngle))
+  camQuat = quatMultiply(camTiltQuat, camQuat)
+  
+  local camPos = quatRotateVec(camQuat, {x = relX, y = relY, z = relZ})
+  
+  -- In camera frame: X = forward, Y = left, Z = up
+  -- Pinhole projection
+  if camPos.x <= 0.1 then
+    return nil -- behind camera
+  end
+  
+  -- Calculate focal length from HFOV
+  local focalLength = (LCD_W / 2) / math.tan(rad(camHFOV / 2))
+  
+  -- Project to screen (flip Y for screen coords, Z becomes screen Y)
+  local screenX = LCD_W / 2 - (camPos.y / camPos.x) * focalLength
+  local screenY = LCD_H / 2 - (camPos.z / camPos.x) * focalLength
+  
+  return {x = screenX, y = screenY, depth = camPos.x}
+end
+
+------ RENDERING ------
+
+local function drawLine3D(x1, y1, z1, x2, y2, z2)
+  local p1 = projectPoint(x1, y1, z1)
+  local p2 = projectPoint(x2, y2, z2)
+  if p1 and p2 then
+    lcd.drawLine(p1.x, p1.y, p2.x, p2.y, SOLID, FORCE)
+  end
+end
+
+local function drawCube(cx, cy, cz, size)
+  local s = size / 2
+  -- 8 corners of the cube
+  local corners = {
+    {cx - s, cy - s, cz - s},
+    {cx + s, cy - s, cz - s},
+    {cx + s, cy + s, cz - s},
+    {cx - s, cy + s, cz - s},
+    {cx - s, cy - s, cz + s},
+    {cx + s, cy - s, cz + s},
+    {cx + s, cy + s, cz + s},
+    {cx - s, cy + s, cz + s},
+  }
+  -- 12 edges
+  local edges = {
+    {1,2}, {2,3}, {3,4}, {4,1}, -- bottom
+    {5,6}, {6,7}, {7,8}, {8,5}, -- top
+    {1,5}, {2,6}, {3,7}, {4,8}, -- verticals
+  }
+  for _, edge in ipairs(edges) do
+    local c1, c2 = corners[edge[1]], corners[edge[2]]
+    drawLine3D(c1[1], c1[2], c1[3], c2[1], c2[2], c2[3])
+  end
+end
+
+local function drawGroundGrid()
+  local z = 0 -- ground plane at z=0
+  local halfSize = gridSize / 2
+  -- Draw grid lines parallel to X axis
+  for y = -halfSize, halfSize, gridSpacing do
+    drawLine3D(-halfSize, y, z, halfSize, y, z)
+  end
+  -- Draw grid lines parallel to Y axis
+  for x = -halfSize, halfSize, gridSpacing do
+    drawLine3D(x, -halfSize, z, x, halfSize, z)
+  end
 end
 
 local function render()
-
+  lcd.clear()
+  
+  -- Draw ground grid
+  drawGroundGrid()
+  
+  -- Draw all cubes
+  for _, cube in ipairs(cubes) do
+    drawCube(cube[1], cube[2], cube[3], cube[4])
+  end
+  
+  -- Draw HUD info
+  lcd.drawText(2, 2, "Alt:" .. string.format("%.1f", dronePosition.z), SMLSIZE)
 end
 
-local function game_step()
-    angVelBody.x = stickToAngularVel(getValue('ail'))
-    angVelBody.y = stickToAngularVel(getValue('ele'))
-    angVelBody.z = stickToAngularVel(getValue('yaw'))
-    thrust = getValue('thr') * thrustWeightRatio * gravity
+------ PHYSICS ------
+
+local function physics_step(deltaT)
+  -- Read stick inputs (-1024 to 1024, normalize to -1 to 1)
+  local ailInput = getValue('ail') / 1024
+  local eleInput = getValue('ele') / 1024
+  local rudInput = getValue('rud') / 1024
+  local thrInput = (getValue('thr') + 1024) / 2048 -- 0 to 1
+  
+  -- Convert to body angular velocities (rad/s)
+  local wx = stickToAngularVel(ailInput)  -- roll
+  local wy = stickToAngularVel(eleInput)  -- pitch  
+  local wz = stickToAngularVel(rudInput)  -- yaw
+  
+  -- Update orientation
+  droneQuat = quatIntegrateBodyRates(droneQuat, wx, wy, wz, deltaT)
+  
+  -- Calculate thrust vector in world frame
+  -- Thrust points along drone's +Z axis (up in body frame)
+  local thrustMag = thrInput * thrustWeightRatio * gravity
+  local thrustBody = {x = 0, y = 0, z = thrustMag}
+  local thrustWorld = quatRotateVec(droneQuat, thrustBody)
+  
+  -- Apply forces: thrust + gravity
+  local ax = thrustWorld.x
+  local ay = thrustWorld.y
+  local az = thrustWorld.z - gravity
+  
+  -- Integrate velocity
+  droneSpeed.x = droneSpeed.x + ax * deltaT
+  droneSpeed.y = droneSpeed.y + ay * deltaT
+  droneSpeed.z = droneSpeed.z + az * deltaT
+  
+  -- Integrate position
+  dronePosition.x = dronePosition.x + droneSpeed.x * deltaT
+  dronePosition.y = dronePosition.y + droneSpeed.y * deltaT
+  dronePosition.z = dronePosition.z + droneSpeed.z * deltaT
+  
+  -- Ground collision
+  if dronePosition.z < 0 then
+    dronePosition.z = 0
+    if droneSpeed.z < 0 then
+      droneSpeed.z = 0
+    end
+  end
 end
+
+local function resetDrone()
+  dronePosition = {x = 0, y = 0, z = 2}
+  droneSpeed = {x = 0, y = 0, z = 0}
+  droneQuat = {w = 1, x = 0, y = 0, z = 0}
+end
+
+------ MAIN FUNCTIONS ------
 
 local function init_func()
+  lastTime = getTime()
+  resetDrone()
 end
 
 local function run_func(event)
-  if not raceStarted then
-    lcd.clear()
-    lcd.drawText(LCD_W/2 - 59, 54, "Press [Enter] to start")
-    if counter then
-      lcd.drawText(LCD_W/2 - 27, 28, "Result:")
-      lcd.drawNumber(LCD_W/2 + 12, 28, counter, BOLD)
-      if isNewBest then
-        lcd.drawText(LCD_W/2 - 42, 2, "New best score!")
-      else
-        lcd.drawText(LCD_W/2 - 37, 2, "Best score:")
-        lcd.drawNumber(LCD_W/2 + 26, 2, bestResult)
-      end
-    else
-      lcd.drawText(LCD_W/2 - 47, 28, "Lua FPV Simulator", BOLD)
-    end
-    if event == EVT_ENTER_BREAK then
-      drone.x = 0
-      drone.y = 0
-      drone.z = 0
-      objectCounter = 0
-      for i = 1, objectsN do
-        objects[i] = generateObject(zObjectsStep * i)
-      end
-      counter = 0
-      countDown = 3
-      startTime = getTime() + countDown * 100
-      finishTime = getTime() + (raceTime + countDown) * 100
-      countDown = countDown + 1
-      startTonePlayed = false
-      raceStarted = true
-      isNewBest = false
-    end
-  else
-    if lowFps then
-      fpsCounter = fpsCounter + 1
-      if fpsCounter == 2 then
-        fpsCounter = 0
-        return 0
-      end
-    end
-    lcd.clear()
-    currentTime = getTime()
-    if currentTime < startTime then
-      local cnt = (startTime - currentTime) / 100 + 1
-      if cnt < countDown then
-        playTone(1500, 100, 0)
-        countDown = countDown - 1
-      end
-      lcd.drawNumber(LCD_W/2 - 2, LCD_H - LCD_H/3, cnt, BOLD)
-    elseif currentTime < finishTime then
-      if (currentTime - startTime) < 100 then
-        lcd.drawText(LCD_W/2 - 6, 48, 'GO!', BOLD)
-        if not startTonePlayed then
-          playTone(2250, 500, 0)
-          startTonePlayed = true
-        end
-      end
-      if speed.z < 0 then speed.z = 0 end
-      drone.y = drone.y - speed.y
-      if drone.y >= 0 then
-        drone.y = 0
-        speed.z = 0
-        speed.x = 0
-      end
-      drone.z = drone.z + speed.z
-      drone.x = drone.x + speed.x
-      if drone.x > track.w * 3 then drone.x = track.w * 3 end
-      if drone.x < -track.w * 3 then drone.x = -track.w * 3 end
-      if drone.y < -track.h then drone.y = -track.h end
-    else
-      if (not bestResult) or (counter > bestResult) then
-        isNewBest = true
-        saveBestResult(counter)
-        bestResult = counter
-      end
-      raceStarted = false
-    end
-    remainingTime = (finishTime - currentTime)/100 + 1
-    if remainingTime > raceTime then remainingTime = raceTime end
-    lcd.drawTimer(LCD_W - 25, 2, remainingTime)
-    local closestDist = drone.z + zObjectsStep * objectsN
-    for i = 1, objectsN do
-      if objects[i].z < closestDist and objects[i].z > (drone.z + speed.z) then
-        closestN = i
-        closestDist = objects[i].z
-      end
-    end
-    for i = 1, objectsN do
-      if drone.z >= objects[i].z then
-        success = false
-        if objects[i].t == "gateGround" then
-          if (math.abs(objects[i].x - drone.x) <= gate.w/2) and (drone.y > -gate.h) then
-            success = true
-          end
-        elseif objects[i].t == "gateAir" then
-          if (math.abs(objects[i].x - drone.x) <= gate.w/2) and (drone.y < -gate.h) and (drone.y > -2*gate.h) then
-            success = true
-          end
-        elseif objects[i].t == "flagLeft" then
-          if (objects[i].x < drone.x) and (drone.y > -2*gate.h) then
-            success = true
-          end
-        elseif objects[i].t == "flagRight" then
-          if (objects[i].x > drone.x) and (drone.y > -2*gate.h) then
-            success = true
-          end
-        end
-        if success then
-          counter = counter + 1
-          playTone(1000, 100, 0)
-        else
-          counter = counter - 1
-          playTone(500, 300, 0)
-        end
-        objects[i] = generateObject()
-      else
-        drawObject(objects[i], i == closestN)
-      end
-    end
-    drawLandscape()
-    lcd.drawNumber(3, 2, counter)
-    if event == EVT_EXIT_BREAK then
-      raceStarted = false
-      counter = nil
-    end
+  -- Calculate delta time
+  local currentTime = getTime()
+  local deltaT = (currentTime - lastTime) / 100 -- getTime() is in 10ms units
+  lastTime = currentTime
+  
+  -- Clamp deltaT to avoid physics explosions
+  if deltaT > 0.1 then deltaT = 0.1 end
+  if deltaT < 0.001 then deltaT = 0.02 end
+  
+  -- Check for reset (Enter button)
+  if event == EVT_ENTER_BREAK then
+    resetDrone()
   end
+  
+  -- Update physics
+  physics_step(deltaT)
+  
+  -- Render the scene
+  render()
+  
+  -- Exit on EXIT button
+  if event == EVT_EXIT_BREAK then
+    return 1
+  end
+  
   return 0
 end
 
