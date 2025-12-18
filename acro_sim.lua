@@ -22,10 +22,10 @@ local lastTime = 0
 
 -- Hard-coded cubes: {x, y, z, size} where z is up
 local cubes = {
-  {5, 0, 1, 2},
-  {-3, -5, 1.5, 3},
-  {10, 5, 0.5, 1},
-  {0, 10, 2, 2},
+  {6, 0, 5, 3},
+  -- {-3, -5, 1.5, 3},
+  -- {10, 5, 0.5, 1},
+  -- {0, 10, 2, 2},
 }
 
 -- Grid settings
