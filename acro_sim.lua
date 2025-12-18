@@ -1,6 +1,19 @@
 -- Acro FPV drone simulator for OpenTX --
 -- Author: Eric Pedley
 
+-- Cache math functions for performance
+local sqrt = math.sqrt
+local sin = math.sin
+local cos = math.cos
+local abs = math.abs
+local max = math.max
+local min = math.min
+local tan = math.tan
+local floor = math.floor
+
+-- Pre-computed math constants
+local PI_OVER_180 = math.pi / 180
+
 local settingsPath = "/SCRIPTS/acro_settings.txt"
 
 local topSpeed = 20 -- meters per second
@@ -47,8 +60,21 @@ local function saveSettings()
 end
 
 local function recalculateDragCoeff()
-  local maxHorizontalThrust = gravity * math.sqrt(thrustWeightRatio * thrustWeightRatio - 1)
+  local maxHorizontalThrust = gravity * sqrt(thrustWeightRatio * thrustWeightRatio - 1)
   dragCoeff = maxHorizontalThrust / (topSpeed * topSpeed)
+end
+
+-- Update pre-computed constants (call when settings change or on init)
+local function updateConstants()
+  camAngleRad = camAngle * PI_OVER_180
+  recalculateDragCoeff()
+end
+
+-- Initialize LCD-dependent constants (must be called after LCD_W/LCD_H are available)
+local function initLcdConstants()
+  halfLcdW = LCD_W / 2
+  halfLcdH = LCD_H / 2
+  focalLength = halfLcdW / tan(camHFOV * PI_OVER_180 / 2)
 end
 
 local function getCurrentSettingValue()
@@ -88,7 +114,7 @@ local function adjustCurrentSetting(direction)
     if camAngle < 10 then camAngle = 10 end
     if camAngle > 50 then camAngle = 50 end
   end
-  recalculateDragCoeff()
+  updateConstants()  -- Update all pre-computed values
   saveSettings()
 end
 
@@ -107,7 +133,7 @@ end
 -- At terminal velocity: drag = horizontal thrust
 --   dragCoeff * topSpeed^2 = g * sqrt(TWR^2 - 1)
 -- Therefore: dragCoeff = g * sqrt(TWR^2 - 1) / topSpeed^2
-local maxHorizontalThrust = gravity * math.sqrt(thrustWeightRatio * thrustWeightRatio - 1)
+local maxHorizontalThrust = gravity * sqrt(thrustWeightRatio * thrustWeightRatio - 1)
 local dragCoeff = maxHorizontalThrust / (topSpeed * topSpeed)
 local dt = 0.05 -- timestep in seconds (approx 20 fps)
 
@@ -116,6 +142,22 @@ local droneSpeed = {x = 0, y = 0, z = 0}
 -- quaternion: w is scalar, x/y/z are vector components
 -- identity = no rotation, drone facing +X direction
 local droneQuat = {w = 1, x = 0, y = 0, z = 0}
+
+-- Cached camera quaternion (updated once per frame)
+local cachedCamQuat = nil
+
+-- Pre-computed constants (updated when settings change)
+local camAngleRad = 0
+local focalLength = 0
+local halfLcdW = 0
+local halfLcdH = 0
+local lcdInitialized = false  -- flag to track LCD constant initialization
+
+-- HUD text caching
+local cachedAltText = ""
+local cachedAltInt = -9999
+local cachedSpdText = ""
+local cachedSpdInt = -9999
 
 local lastTime = 0
 
@@ -134,21 +176,21 @@ local gridSpacing = 25 -- spacing between grid lines
 ------ MATH HELPERS ------
 
 local function clamp(val, minVal, maxVal)
-  return math.max(minVal, math.min(maxVal, val))
+  return max(minVal, min(maxVal, val))
 end
 
 local function rad(deg)
-  return deg * math.pi / 180
+  return deg * PI_OVER_180
 end
 
 local function deg(r)
-  return r * 180 / math.pi
+  return r / PI_OVER_180
 end
 
 ------ QUATERNION MATH ------
 
 local function quatNormalize(q)
-  local mag = math.sqrt(q.w*q.w + q.x*q.x + q.y*q.y + q.z*q.z)
+  local mag = sqrt(q.w*q.w + q.x*q.x + q.y*q.y + q.z*q.z)
   if mag < 0.0001 then mag = 1 end
   return {w = q.w/mag, x = q.x/mag, y = q.y/mag, z = q.z/mag}
 end
@@ -176,9 +218,9 @@ end
 -- Create quaternion from axis-angle (axis should be unit vector, angle in radians)
 local function quatFromAxisAngle(ax, ay, az, angle)
   local halfAngle = angle / 2
-  local s = math.sin(halfAngle)
+  local s = sin(halfAngle)
   return {
-    w = math.cos(halfAngle),
+    w = cos(halfAngle),
     x = ax * s,
     y = ay * s,
     z = az * s
@@ -188,7 +230,7 @@ end
 -- Update quaternion with body angular velocity (roll=x, pitch=y, yaw=z) in rad/s
 local function quatIntegrateBodyRates(q, wx, wy, wz, deltaT)
   -- Angular velocity magnitude
-  local wMag = math.sqrt(wx*wx + wy*wy + wz*wz)
+  local wMag = sqrt(wx*wx + wy*wy + wz*wz)
   if wMag < 0.0001 then
     return q
   end
@@ -203,11 +245,11 @@ end
 
 local function stickToAngularVel(stickInput)
   -- Betaflight rates formula, returns rad/s
-  local absStick = math.abs(stickInput)
+  local absStick = abs(stickInput)
   local superRate = rate
   local rcCommand = stickInput
-  local angleRate = 200 * (rcRate + math.max(0.0, 14.54*(rcRate-2))) * rcCommand
-  local superFactor = 1.0 / math.max(1.0 - absStick * superRate, 0.01)
+  local angleRate = 200 * (rcRate + max(0.0, 14.54*(rcRate-2))) * rcCommand
+  local superFactor = 1.0 / max(1.0 - absStick * superRate, 0.01)
   local expoFactor = absStick * absStick * absStick * expo + 1 - expo
   return rad(angleRate * superFactor * expoFactor)
 end
@@ -216,6 +258,13 @@ end
 
 local nearPlane = 0.1 -- near clipping plane distance
 
+-- Update cached camera quaternion (call once per frame)
+local function updateCameraQuat()
+  local camQuat = quatConjugate(droneQuat)
+  local camTiltQuat = quatFromAxisAngle(0, 1, 0, camAngleRad)
+  cachedCamQuat = quatMultiply(camTiltQuat, camQuat)
+end
+
 -- Get camera-space coordinates for a world point
 local function worldToCameraSpace(worldX, worldY, worldZ)
   -- Transform world point to drone-relative coordinates
@@ -223,14 +272,8 @@ local function worldToCameraSpace(worldX, worldY, worldZ)
   local relY = worldY - dronePosition.y
   local relZ = worldZ - dronePosition.z
   
-  -- Rotate by inverse of drone orientation to get camera-frame coords
-  local camQuat = quatConjugate(droneQuat)
-  
-  -- Apply camera tilt (rotate around Y axis in body frame)
-  local camTiltQuat = quatFromAxisAngle(0, 1, 0, rad(camAngle))
-  camQuat = quatMultiply(camTiltQuat, camQuat)
-  
-  return quatRotateVec(camQuat, {x = relX, y = relY, z = relZ})
+  -- Use cached camera quaternion
+  return quatRotateVec(cachedCamQuat, {x = relX, y = relY, z = relZ})
 end
 
 -- Project a camera-space point to screen coordinates
@@ -355,6 +398,7 @@ end
 
 local function drawCube(cx, cy, cz, size)
   local s = size / 2
+  local draw = drawLine3D  -- local reference for speed
   -- 8 corners of the cube
   local corners = {
     {cx - s, cy - s, cz - s},
@@ -394,6 +438,15 @@ end
 local function render()
   lcd.clear()
   
+  -- Initialize LCD constants on first render (LCD_W/LCD_H not available at init)
+  if not lcdInitialized then
+    initLcdConstants()
+    lcdInitialized = true
+  end
+  
+  -- Update cached camera quaternion once per frame
+  updateCameraQuat()
+  
   -- Draw ground grid
   drawGroundGrid()
   
@@ -403,11 +456,22 @@ local function render()
   end
   
   -- Calculate current speed
-  local currentSpeed = math.sqrt(droneSpeed.x^2 + droneSpeed.y^2 + droneSpeed.z^2)
+  local currentSpeed = sqrt(droneSpeed.x^2 + droneSpeed.y^2 + droneSpeed.z^2)
   
-  -- Draw HUD info
-  lcd.drawText(2, 2, "Alt:" .. string.format("%.1f", dronePosition.z), SMLSIZE)
-  lcd.drawText(2, 10, "Spd:" .. string.format("%.1f", currentSpeed), SMLSIZE)
+  -- Draw HUD info with cached strings (only update when value changes)
+  local altInt = floor(dronePosition.z * 10)
+  if altInt ~= cachedAltInt then
+    cachedAltInt = altInt
+    cachedAltText = "Alt:" .. string.format("%.1f", dronePosition.z)
+  end
+  lcd.drawText(2, 2, cachedAltText, SMLSIZE)
+  
+  local spdInt = floor(currentSpeed * 10)
+  if spdInt ~= cachedSpdInt then
+    cachedSpdInt = spdInt
+    cachedSpdText = "Spd:" .. string.format("%.1f", currentSpeed)
+  end
+  lcd.drawText(2, 10, cachedSpdText, SMLSIZE)
   
   -- Debug: display last event
   -- if lastEvent ~= 0 then
@@ -446,7 +510,7 @@ local function physics_step(deltaT)
   local thrustWorld = quatRotateVec(droneQuat, thrustBody)
   
   -- Calculate drag force (proportional to v^2, opposing velocity)
-  local speed = math.sqrt(droneSpeed.x^2 + droneSpeed.y^2 + droneSpeed.z^2)
+  local speed = sqrt(droneSpeed.x^2 + droneSpeed.y^2 + droneSpeed.z^2)
   local dragMag = dragCoeff * speed * speed
   local dragX, dragY, dragZ = 0, 0, 0
   if speed > 0.001 then
@@ -490,7 +554,7 @@ end
 
 local function init_func()
   loadSettings()
-  recalculateDragCoeff()
+  updateConstants()   -- Update all pre-computed values
   lastTime = getTime()
   settingsDisplayTime = 0
   resetDrone()
