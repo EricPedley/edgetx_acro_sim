@@ -260,7 +260,7 @@ local function run_func(event)
     if currentTime < startTime then
       local cnt = (startTime - currentTime) / 100 + 1
       if cnt < countDown then
-        playTone(1500, 100, 0)
+        -- playTone(1500, 100, 0)
         countDown = countDown - 1
       end
       lcd.drawNumber(LCD_W/2 - 2, LCD_H - LCD_H/3, cnt, BOLD)
@@ -268,7 +268,7 @@ local function run_func(event)
       if (currentTime - startTime) < 100 then
         lcd.drawText(LCD_W/2 - 6, 48, 'GO!', BOLD)
         if not startTonePlayed then
-          playTone(2250, 500, 0)
+          -- playTone(2250, 500, 0)
           startTonePlayed = true
         end
       end
@@ -327,10 +327,10 @@ local function run_func(event)
         end
         if success then
           counter = counter + 1
-          playTone(1000, 100, 0)
+          -- playTone(1000, 100, 0)
         else
           counter = counter - 1
-          playTone(500, 300, 0)
+          -- playTone(500, 300, 0)
         end
         objects[i] = generateObject()
       else
