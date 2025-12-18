@@ -217,7 +217,7 @@ local function physics_step(deltaT)
   -- Read stick inputs (-1024 to 1024, normalize to -1 to 1)
   local ailInput = getValue('ail') / 1024
   local eleInput = getValue('ele') / 1024
-  local rudInput = getValue('rud') / 1024
+  local rudInput = -getValue('rud') / 1024
   local thrInput = (getValue('thr') + 1024) / 2048 -- 0 to 1
   
   -- Convert to body angular velocities (rad/s)
