@@ -1,6 +1,8 @@
 -- Acro FPV drone simulator for OpenTX --
 -- Author: Eric Pedley
 
+local settingsPath = "/SCRIPTS/acro_settings.txt"
+
 local topSpeed = 20 -- meters per second
 local thrustWeightRatio = 4.0
 local camAngle = 25.0 -- degrees, positive = tilted up
@@ -11,6 +13,90 @@ local rate = 0.7
 local expo = 0.0
 
 local gravity = 9.81
+
+-- Settings menu state
+local settingNames = {"Top Speed", "TWR", "Cam Angle"}
+local currentSettingIndex = 1  -- 1=topSpeed, 2=TWR, 3=camAngle
+local settingsDisplayTime = 0  -- time when settings were last changed
+local settingsDisplayTimeout = 100  -- 1 second (in 10ms units)
+
+------ SETTINGS PERSISTENCE ------
+
+local function loadSettings()
+  local f = io.open(settingsPath, "r")
+  if f == nil then
+    return
+  end
+  local content = io.read(f, 100)
+  io.close(f)
+  if content then
+    local ts, twr, ca = string.match(content, "([%d%.]+),([%d%.]+),([%d%.]+)")
+    if ts then topSpeed = tonumber(ts) end
+    if twr then thrustWeightRatio = tonumber(twr) end
+    if ca then camAngle = tonumber(ca) end
+  end
+end
+
+local function saveSettings()
+  local f = io.open(settingsPath, "w")
+  if f then
+    io.write(f, string.format("%.1f,%.2f,%.1f", topSpeed, thrustWeightRatio, camAngle))
+    io.close(f)
+  end
+end
+
+local function recalculateDragCoeff()
+  local maxHorizontalThrust = gravity * math.sqrt(thrustWeightRatio * thrustWeightRatio - 1)
+  dragCoeff = maxHorizontalThrust / (topSpeed * topSpeed)
+end
+
+local function getCurrentSettingValue()
+  if currentSettingIndex == 1 then
+    return topSpeed
+  elseif currentSettingIndex == 2 then
+    return thrustWeightRatio
+  else
+    return camAngle
+  end
+end
+
+local function getCurrentSettingFormat()
+  if currentSettingIndex == 1 then
+    return string.format("%.0f m/s", topSpeed)
+  elseif currentSettingIndex == 2 then
+    return string.format("%.2f", thrustWeightRatio)
+  else
+    return string.format("%.0f deg", camAngle)
+  end
+end
+
+local function adjustCurrentSetting(direction)
+  if currentSettingIndex == 1 then
+    -- Top speed: 10-50, increment 1
+    topSpeed = topSpeed + direction * 1
+    if topSpeed < 10 then topSpeed = 10 end
+    if topSpeed > 50 then topSpeed = 50 end
+  elseif currentSettingIndex == 2 then
+    -- TWR: 2.0-6.0, increment 0.25
+    thrustWeightRatio = thrustWeightRatio + direction * 0.25
+    if thrustWeightRatio < 2.0 then thrustWeightRatio = 2.0 end
+    if thrustWeightRatio > 6.0 then thrustWeightRatio = 6.0 end
+  else
+    -- Cam angle: 10-50, increment 5
+    camAngle = camAngle + direction * 5
+    if camAngle < 10 then camAngle = 10 end
+    if camAngle > 50 then camAngle = 50 end
+  end
+  recalculateDragCoeff()
+  saveSettings()
+end
+
+local function cycleSettingIndex()
+  currentSettingIndex = currentSettingIndex + 1
+  if currentSettingIndex > 3 then
+    currentSettingIndex = 1
+  end
+end
 
 -- Drag coefficient calculated so that at max horizontal flight, drone reaches topSpeed
 -- At max horizontal speed, drone tilts so vertical thrust = gravity:
@@ -315,8 +401,19 @@ local function render()
     drawCube(cube[1], cube[2], cube[3], cube[4])
   end
   
+  -- Calculate current speed
+  local currentSpeed = math.sqrt(droneSpeed.x^2 + droneSpeed.y^2 + droneSpeed.z^2)
+  
   -- Draw HUD info
   lcd.drawText(2, 2, "Alt:" .. string.format("%.1f", dronePosition.z), SMLSIZE)
+  lcd.drawText(2, 10, "Spd:" .. string.format("%.1f", currentSpeed), SMLSIZE)
+  
+  -- Draw settings display if recently changed
+  local currentTime = getTime()
+  if currentTime - settingsDisplayTime < settingsDisplayTimeout then
+    local settingText = settingNames[currentSettingIndex] .. ": " .. getCurrentSettingFormat()
+    lcd.drawText(LCD_W/2 - 30, LCD_H - 12, settingText, SMLSIZE)
+  end
 end
 
 ------ PHYSICS ------
@@ -386,7 +483,10 @@ end
 ------ MAIN FUNCTIONS ------
 
 local function init_func()
+  loadSettings()
+  recalculateDragCoeff()
   lastTime = getTime()
+  settingsDisplayTime = 0
   resetDrone()
 end
 
@@ -403,6 +503,18 @@ local function run_func(event)
   -- Check for reset (Enter button)
   if event == EVT_ENTER_BREAK then
     resetDrone()
+  end
+  
+  -- Settings controls: PAGE to cycle, PLUS/MINUS to adjust
+  if event == EVT_PAGE_BREAK then
+    cycleSettingIndex()
+    settingsDisplayTime = currentTime
+  elseif event == EVT_PLUS_BREAK or event == EVT_PLUS_REPT then
+    adjustCurrentSetting(1)
+    settingsDisplayTime = currentTime
+  elseif event == EVT_MINUS_BREAK or event == EVT_MINUS_REPT then
+    adjustCurrentSetting(-1)
+    settingsDisplayTime = currentTime
   end
   
   -- Update physics
