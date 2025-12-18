@@ -33,30 +33,30 @@ if [ -f "$TARGET_DIR/example-sim-game.lua" ]; then
     echo -e "${GREEN}✓ Backup created${NC}"
 fi
 
-# Copy main game script
+# Find and copy all Lua files
 echo ""
-echo -e "${YELLOW}Copying main game script...${NC}"
-if cp example-sim-game.lua "$TARGET_DIR/"; then
-    echo -e "${GREEN}✓ example-sim-game.lua copied${NC}"
-else
-    echo -e "${RED}✗ Failed to copy example-sim-game.lua${NC}"
+echo -e "${YELLOW}Copying Lua scripts...${NC}"
+
+# Find all .lua files in current directory and subdirectories
+LUA_FILES=$(find . -maxdepth 2 -name "*.lua" -type f | sort)
+
+if [ -z "$LUA_FILES" ]; then
+    echo -e "${RED}✗ No Lua files found${NC}"
     exit 1
 fi
 
-# Copy test scripts
-echo ""
-echo -e "${YELLOW}Copying test scripts...${NC}"
-if cp test/test-require.lua "$TARGET_DIR/"; then
-    echo -e "${GREEN}✓ test-require.lua copied${NC}"
-else
-    echo -e "${RED}✗ Failed to copy test-require.lua${NC}"
-fi
-
-if cp test/utils.lua "$TARGET_DIR/"; then
-    echo -e "${GREEN}✓ utils.lua copied${NC}"
-else
-    echo -e "${RED}✗ Failed to copy utils.lua${NC}"
-fi
+COPY_COUNT=0
+for file in $LUA_FILES; do
+    # Get just the filename (strip leading ./)
+    filename=$(basename "$file")
+    
+    if cp "$file" "$TARGET_DIR/$filename"; then
+        echo -e "${GREEN}✓ $filename copied${NC}"
+        ((COPY_COUNT++))
+    else
+        echo -e "${RED}✗ Failed to copy $filename${NC}"
+    fi
+done
 
 # Show summary
 echo ""
@@ -65,11 +65,5 @@ echo -e "${GREEN}Build completed!${NC}"
 echo "========================================"
 echo ""
 echo "Files deployed to: $TARGET_DIR"
-echo ""
-echo "Scripts available in OpenTX:"
-echo "  • example-sim-game.lua (FPV Simulator)"
-echo "  • test-require.lua (Module Test)"
-echo ""
-echo "Run 'test-require' in OpenTX to verify"
-echo "if require() works on your hardware."
+echo "Total scripts copied: $COPY_COUNT"
 echo ""
