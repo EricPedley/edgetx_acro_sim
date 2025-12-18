@@ -19,6 +19,7 @@ local settingNames = {"Top Speed", "TWR", "Cam Angle"}
 local currentSettingIndex = 1  -- 1=topSpeed, 2=TWR, 3=camAngle
 local settingsDisplayTime = 0  -- time when settings were last changed
 local settingsDisplayTimeout = 100  -- 1 second (in 10ms units)
+local lastEvent = 0  -- for debugging button events
 
 ------ SETTINGS PERSISTENCE ------
 
@@ -408,6 +409,11 @@ local function render()
   lcd.drawText(2, 2, "Alt:" .. string.format("%.1f", dronePosition.z), SMLSIZE)
   lcd.drawText(2, 10, "Spd:" .. string.format("%.1f", currentSpeed), SMLSIZE)
   
+  -- Debug: display last event
+  -- if lastEvent ~= 0 then
+  --   lcd.drawText(LCD_W - 50, 2, "EVT:" .. tostring(lastEvent), SMLSIZE)
+  -- end
+  
   -- Draw settings display if recently changed
   local currentTime = getTime()
   if currentTime - settingsDisplayTime < settingsDisplayTimeout then
@@ -491,6 +497,11 @@ local function init_func()
 end
 
 local function run_func(event)
+  -- Store event for debug display
+  if event ~= 0 then
+    lastEvent = event
+  end
+  
   -- Calculate delta time
   local currentTime = getTime()
   local deltaT = (currentTime - lastTime) / 100 -- getTime() is in 10ms units
@@ -506,13 +517,13 @@ local function run_func(event)
   end
   
   -- Settings controls: PAGE to cycle, PLUS/MINUS to adjust
-  if event == EVT_PAGE_BREAK then
+  if event == 109 then
     cycleSettingIndex()
     settingsDisplayTime = currentTime
-  elseif event == EVT_PLUS_BREAK or event == EVT_PLUS_REPT then
+  elseif event == 101 then
     adjustCurrentSetting(1)
     settingsDisplayTime = currentTime
-  elseif event == EVT_MINUS_BREAK or event == EVT_MINUS_REPT then
+  elseif event == 100 then
     adjustCurrentSetting(-1)
     settingsDisplayTime = currentTime
   end
