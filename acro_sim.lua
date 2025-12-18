@@ -208,11 +208,22 @@ local function quatConjugate(q)
   return {w = q.w, x = -q.x, y = -q.y, z = -q.z}
 end
 
--- Rotate a vector by a quaternion
+-- Rotate a vector by a quaternion (optimized using cross product formula)
 local function quatRotateVec(q, v)
-  local qv = {w = 0, x = v.x, y = v.y, z = v.z}
-  local result = quatMultiply(quatMultiply(q, qv), quatConjugate(q))
-  return {x = result.x, y = result.y, z = result.z}
+  -- Optimized rotation: v' = v + 2*w*(q×v) + 2*(q×(q×v))
+  local qx, qy, qz, qw = q.x, q.y, q.z, q.w
+  local vx, vy, vz = v.x, v.y, v.z
+  
+  -- t = 2 * cross(q.xyz, v)
+  local tx = 2 * (qy * vz - qz * vy)
+  local ty = 2 * (qz * vx - qx * vz)
+  local tz = 2 * (qx * vy - qy * vx)
+  
+  return {
+    x = vx + qw * tx + (qy * tz - qz * ty),
+    y = vy + qw * ty + (qz * tx - qx * tz),
+    z = vz + qw * tz + (qx * ty - qy * tx)
+  }
 end
 
 -- Create quaternion from axis-angle (axis should be unit vector, angle in radians)
