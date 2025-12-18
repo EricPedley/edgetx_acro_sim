@@ -107,8 +107,8 @@ local function stickToAngularVel(stickInput)
   local absStick = math.abs(stickInput)
   local superRate = rate
   local rcCommand = stickInput
-  local angleRate = 200 * (rcRate + max(0.0, 14.54*(rcRate-2))) * rcCommand
-  local superFactor = 1.0 / max(1.0 - absStick * superRate, 0.01)
+  local angleRate = 200 * (rcRate + math.max(0.0, 14.54*(rcRate-2))) * rcCommand
+  local superFactor = 1.0 / math.max(1.0 - absStick * superRate, 0.01)
   local expoFactor = absStick * absStick * absStick * expo + 1 - expo
   return rad(angleRate * superFactor * expoFactor)
 end
@@ -241,7 +241,7 @@ local function render()
   lcd.clear()
   
   -- Draw ground grid
-  drawGroundGrid()
+  -- drawGroundGrid()
   
   -- Draw all cubes
   for _, cube in ipairs(cubes) do
