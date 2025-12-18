@@ -127,7 +127,7 @@ local function projectPoint(worldX, worldY, worldZ)
   local camQuat = quatConjugate(droneQuat)
   
   -- Apply camera tilt (rotate around Y axis in body frame)
-  local camTiltQuat = quatFromAxisAngle(0, 1, 0, rad(-camAngle))
+  local camTiltQuat = quatFromAxisAngle(0, 1, 0, rad(camAngle))
   camQuat = quatMultiply(camTiltQuat, camQuat)
   
   local camPos = quatRotateVec(camQuat, {x = relX, y = relY, z = relZ})
