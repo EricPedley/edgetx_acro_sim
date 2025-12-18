@@ -1,10 +1,10 @@
 -- Acro FPV drone simulator for OpenTX --
 -- Author: Eric Pedley
 
-local topSpeed = 15 -- meters per second
+local topSpeed = 20 -- meters per second
 local thrustWeightRatio = 4.0
-local camAngle = 20.0 -- degrees, positive = tilted up
-local camHFOV = 110.0 -- horizontal field of view in degrees
+local camAngle = 25.0 -- degrees, positive = tilted up
+local camHFOV = 120.0 -- horizontal field of view in degrees
 
 local rcRate = 1.0
 local rate = 0.7
@@ -34,15 +34,15 @@ local lastTime = 0
 
 -- Hard-coded cubes: {x, y, z, size} where z is up
 local cubes = {
-  {6, 0, 5, 3},
-  -- {-3, -5, 1.5, 3},
+  {6, 0, 2, 3},
+  {-3, -5, 5, 5},
   -- {10, 5, 0.5, 1},
   -- {0, 10, 2, 2},
 }
 
 -- Grid settings
-local gridSize = 50  -- total grid extent
-local gridSpacing = 5 -- spacing between grid lines
+local gridSize = 100  -- total grid extent
+local gridSpacing = 25 -- spacing between grid lines
 
 ------ MATH HELPERS ------
 
@@ -308,7 +308,7 @@ local function render()
   lcd.clear()
   
   -- Draw ground grid
-  -- drawGroundGrid()
+  drawGroundGrid()
   
   -- Draw all cubes
   for _, cube in ipairs(cubes) do
