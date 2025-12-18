@@ -2,7 +2,7 @@
 -- Author: Eric Pedley
 
 local thrustWeightRatio = 4.0
-local camAngle = 30.0 -- degrees, positive = tilted up
+local camAngle = 20.0 -- degrees, positive = tilted up
 local camHFOV = 110.0 -- horizontal field of view in degrees
 
 local rcRate = 1.0
@@ -136,6 +136,11 @@ end
 
 -- Project a camera-space point to screen coordinates
 local function projectCameraPoint(camPos)
+  -- Guard against division by zero or very small values
+  if camPos.x < nearPlane then
+    return nil
+  end
+  
   -- Calculate focal length from HFOV
   local focalLength = (LCD_W / 2) / math.tan(rad(camHFOV / 2))
   
@@ -195,6 +200,11 @@ local function drawLine3D(x1, y1, z1, x2, y2, z2)
   -- Project to screen
   local p1 = projectCameraPoint(clipped1)
   local p2 = projectCameraPoint(clipped2)
+  
+  -- Guard against failed projection
+  if not p1 or not p2 then
+    return
+  end
   
   lcd.drawLine(p1.x, p1.y, p2.x, p2.y, SOLID, FORCE)
 end
